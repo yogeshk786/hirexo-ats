@@ -1,0 +1,6 @@
+[
+  "fanuc", "siemens", "mitsubishi", "mazak", "haas", "heidenhain",
+  "vmc", "hmc", "cnc turning", "cnc milling", "lathe", "grinding", "edm",
+  "autocad", "mastercam", "delcam", "solidworks", "nx cam",
+  "vernier", "micrometer", "cmm", "5-axis", "3-axis", "g-code", "m-code"
+]

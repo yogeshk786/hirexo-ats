@@ -1,0 +1,25 @@
+# 1. Python Environments & Caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 2. Node.js, React, and Electron Build Files
+node_modules/
+dist/
+build/
+out/
+.DS_Store
+
+# 3. Secrets & API Keys (CRITICAL)
+.env
+.env.*
+credentials.json
+token.json
+client_secret.json
+service_account.json
+
+# 4. IDE / Editor Folders
+.vscode/

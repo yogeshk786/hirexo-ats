@@ -1,0 +1,156 @@
+import os
+import sys
+import asyncio
+import uuid
+import certifi  # <-- Provides trusted SSL certificates for MongoDB Atlas
+from typing import List
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# --- Wake up the .env file so the AI gets its API key! ---
+from dotenv import load_dotenv
+load_dotenv()
+
+# Ensure Python can find your 'app' folder
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from app.services.email.gmail_service import GmailService
+from app.services.parser.text_extractor import TextExtractor
+from app.services.parser.resume_parser import ResumeParser
+from app.services.parser.worker import RoundRobinWorker, ParsingTask
+
+# 🚀 NEW: Import our modular routing system
+from app.api.search import router as search_router
+
+# --- Modern FastAPI Lifespan Handler ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Secure the MongoDB Vault Connection
+    mongo_uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+    db_name = os.environ.get("MONGO_DB_NAME", "resume_engine")
+    
+    print("🔌 Connecting to MongoDB Vault...")
+    
+    # --- THE SILVER BULLET FIX: Bypass strict Windows SSL validation for local testing ---
+    app.mongodb_client = AsyncIOMotorClient(mongo_uri, tls=True, tlsAllowInvalidCertificates=True)
+    # ------------------------------------------------------------------------------------
+    
+    app.mongodb = app.mongodb_client[db_name]
+    print("✅ Database connection secured.")
+    
+    # 2. Start the Round-Robin Engine using MongoDB
+    await worker_engine.start(mongodb=app.mongodb, extractor=extractor)
+    
+    # 3. Fire up the 24/7 Hands-Free Email Watcher
+    watcher_task = asyncio.create_task(continuous_inbox_watcher())
+    
+    yield  # --- FastAPI app runs here while suspended ---
+    
+    # 4. Clean shutdown procedures
+    print("🛑 Closing background tasks and database connection.")
+    watcher_task.cancel()
+    if app.mongodb_client:
+        app.mongodb_client.close()
+
+# Initialize core FastAPI app with modern lifespan lifecycle
+app = FastAPI(title="Automated Resume Ingestion Engine", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows your Electron app to connect
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize global extraction tracking tools
+extractor = TextExtractor()
+resume_parser = ResumeParser() 
+resume_queue = asyncio.Queue()
+worker_engine = RoundRobinWorker(queue=resume_queue)
+
+# Attach the parser to the worker object dynamically
+worker_engine.resume_parser = resume_parser 
+
+# Global Database Placeholders
+app.mongodb_client = None
+app.mongodb = None
+
+async def continuous_inbox_watcher():
+    """Endless background loop that checks for new emails and queues them automatically."""
+    print("👀 Continuous Inbox Watcher initialized. Running 24/7...")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    raw_dir = os.path.join(base_dir, 'raw_resumes')
+    
+    # --- FIX 3: Junk File Gatekeeper ---
+    ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png'}
+    
+    while True:
+        try:
+            print("📁 Scanning local folder for files...")
+            
+            # Grabbing files from Gmail (runs in background thread to not block FastAPI)
+            gmail = GmailService()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, gmail.download_resumes)
+            
+            if os.path.exists(raw_dir):
+                # Get all files and sort by modification time (Newest First)
+                raw_files = [os.path.join(raw_dir, f) for f in os.listdir(raw_dir)]
+                raw_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                
+                enqueued_count = 0
+                
+                for file_path in raw_files:
+                    file_name = os.path.basename(file_path)
+                    
+                    if file_name.endswith('_metadata.json'):
+                        continue
+                        
+                    # --- Block weird files from crashing the AI ---
+                    file_ext = os.path.splitext(file_name)[1].lower()
+                    if file_ext not in ALLOWED_EXTENSIONS:
+                        try:
+                            os.remove(file_path)
+                        except OSError:
+                            pass
+                        continue 
+                    
+                    # Check if file is already active in queue
+                    already_queued = any(
+                        task.file_path == file_path for task in list(resume_queue._queue)
+                    )
+                    
+                    # Check if candidate exists in MongoDB to prevent duplicate processing
+                    already_in_db = False
+                    if app.mongodb is not None:
+                        existing_record = await app.mongodb.resumes.find_one({"filename": file_name})
+                        if existing_record:
+                            already_in_db = True
+                    
+                    if not already_queued and not already_in_db:
+                        task_id = str(uuid.uuid4())[:8]
+                        task = ParsingTask(id=task_id, file_path=file_path)
+                        
+                        await resume_queue.put(task)
+                        enqueued_count += 1
+                        
+                if enqueued_count > 0:
+                    print(f"📥 Automatically enqueued {enqueued_count} new files into the pipeline.")
+                    
+        except Exception as e:
+            print(f"⚠️ Error in continuous inbox watcher loop: {e}")
+            
+        # Check the inbox every 60 seconds
+        await asyncio.sleep(60.0)
+
+# ==========================================
+# 🚀 ROUTERS: Plug in the modular endpoints!
+# ==========================================
+app.include_router(search_router)
+
+@app.get("/")
+def read_root():
+    return {"message": "The Automated Resume Engine is running 24/7 smoothly!"}

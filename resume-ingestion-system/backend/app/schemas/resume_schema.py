@@ -1,0 +1,1 @@
+# Resume validation schema
