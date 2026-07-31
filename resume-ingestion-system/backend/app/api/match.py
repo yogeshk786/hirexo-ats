@@ -13,16 +13,23 @@ from app.api.deps import get_current_user_and_company
 
 router = APIRouter()
 
-# 2. Initialize Supabase (Global Variables)
+# 2. Initialize Supabase (Global Variables - Safe because they are just strings)
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 service_role_key: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") # Needed for webhooks!
 
-# 3. Initialize OpenRouter
-aclient = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.environ.get("OPENROUTER_API_KEY"),
-)
+# 🚀 3. LAZY-LOAD OPENROUTER CLIENT (Fixes Startup Crash!)
+def get_openrouter_client() -> AsyncOpenAI:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="Server configuration error: OPENROUTER_API_KEY environment variable is missing."
+        )
+    return AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
 
 class MatchRequest(BaseModel):
     job_id: str
@@ -35,6 +42,9 @@ async def match_candidates(
     auth_data: dict = Depends(get_current_user_and_company) # 🚀 INJECTED THE GATEKEEPER
 ):
     try:
+        # 🚀 INITIALIZE AI CLIENT LOCALLY
+        aclient = get_openrouter_client()
+        
         # 🚀 CREATE SECURE USER CLIENT
         auth_header = {"Authorization": f"Bearer {auth_data['token']}"}
         user_supabase = create_client(url, key, options=ClientOptions(headers=auth_header))
@@ -196,6 +206,9 @@ async def generate_outreach_email(
     auth_data: dict = Depends(get_current_user_and_company) # Secured
 ):
     try:
+        # 🚀 INITIALIZE AI CLIENT LOCALLY
+        aclient = get_openrouter_client()
+
         print(f"✍️ AI AGENT: Drafting outreach email for {payload.candidate_name}...")
         prompt = f"""You are an expert technical recruiter. 
         Write a short, highly personalized, and engaging cold outreach email to a candidate named {payload.candidate_name} for a {payload.job_title} role.
