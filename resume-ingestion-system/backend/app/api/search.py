@@ -1,6 +1,6 @@
 import os
 import asyncio
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException, status
 from supabase import create_client, Client, ClientOptions 
 from dotenv import load_dotenv
 
@@ -11,9 +11,12 @@ load_dotenv()
 
 router = APIRouter()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Helper to strip surrounding quotes, spaces, or tabs from env variables
+def _clean_env(val: str | None) -> str:
+    if not val:
+        return ""
+    return val.strip().strip('"').strip("'")
+
 
 def calculate_rrf(vector_results, keyword_results, parsed_intent, k=60):
     fused_scores = {}
@@ -61,10 +64,20 @@ async def search_candidates(
     embedder = request.app.state.embedder 
     client_company_id = auth_data["company_id"]
     
+    # Safely load and clean Supabase env vars inside the endpoint scope
+    supabase_url = _clean_env(os.getenv("SUPABASE_URL"))
+    supabase_key = _clean_env(os.getenv("SUPABASE_KEY"))
+
+    if not supabase_url or not supabase_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: SUPABASE_URL or SUPABASE_KEY is missing."
+        )
+
     auth_header = {"Authorization": f"Bearer {auth_data['token']}"}
     user_supabase = create_client(
-        SUPABASE_URL, 
-        SUPABASE_KEY, 
+        supabase_url, 
+        supabase_key, 
         options=ClientOptions(headers=auth_header)
     )
 
@@ -152,7 +165,6 @@ async def search_candidates(
                 except Exception:
                     pass 
 
-                # 🚀 ADVANCED UPGRADE: Removed strict role dropping. We let calculate_rrf score them!
                 filtered.append(doc)
             return filtered
 
@@ -182,7 +194,6 @@ async def search_candidates(
                     c_uuid = str(candidate.get("id"))
                     c_mongo = str(candidate.get("candidate_id"))
                     
-                    # 🚀 ADVANCED UPGRADE: Hard-cast to string to ensure relations map perfectly
                     candidate["job_applications"] = [a for a in applications if str(a.get("candidate_id")) in (c_uuid, c_mongo)]
                     candidate["work_experience"] = [w for w in work_history if str(w.get("candidate_id")) in (c_uuid, c_mongo)]
                     candidate["education"] = [e for e in education_data if str(e.get("candidate_id")) in (c_uuid, c_mongo)]
