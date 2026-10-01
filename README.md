@@ -41,5 +41,7 @@ The application is decoupled into a desktop client interface and a containerized
 
 **1. Clone the repository**
 ```bash
-git clone [https://github.com/yourusername/ai-ats-backend.git](https://github.com/yourusername/ai-ats-backend.git)
-cd ai-ats-backend
+git clone https://github.com/yogeshk786/hirexo-ats.git
+cd hirexo-ats
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
